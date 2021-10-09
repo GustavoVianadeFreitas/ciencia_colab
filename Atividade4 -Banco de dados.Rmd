@@ -1,0 +1,286 @@
+---
+title: "Atividade 4 - R Markdown"
+author: "Gustavo Viana de Freitas"
+date: "23/09/2021"
+output: html_document
+---
+
+# Relatório R Markdown Atividade 3 - Acesso a Banco de Dados Abertos    
+# Disciplina **Ferramentas em Ciência Colaborativa e Banco de dados**   
+
+### Programa de Pós-Graduação em Ecologia e Recursos Naturais - PPGERN  
+### Universidade Estadual do Norte Fluminense Darcy Ribeiro  
+  
+  
+#### Contexto  
+  
+A Atividade 3 consistiu em extrair dados de uma espécie da base de dados do GBIF.  
+O roteiro da atividade 3 pode ser visto no [Repositório da Disciplina](https://cammcordeiro.github.io/ciencia_colab/index.html).  
+
+A espécie escolhida foi a bromélia *Alcantarea imperialis* (Carrière) Harms.
+
+O passo a passo abaixo refere-se a todo o procedimento de extração e observação dos dados.
+
+1. Carregando todos os pacotes necessários  
+    i) Utilizando a função `` require ``.  
+
+
+```{r Carregamento de Pacotes, message=FALSE, warning=FALSE}
+require(tidyverse)
+require(rgbif)
+require(ggmap)
+require(maps)
+require(mapdata)
+require(scrubr)
+require(CoordinateCleaner)
+```
+
+2. Importando os dados da espécie da base do GBIF e verificando suas características
+    i) Utilizando a função `` occ_data ``.
+
+```{r Importação e Observação dos dados}
+alcantarea_gbif <- occ_data(scientificName = "Alcantarea imperialis", 
+                      hasCoordinate = TRUE,
+                      hasGeospatialIssue=FALSE)
+
+head(alcantarea_gbif, 10) 
+
+# Checando Dimensões
+dim(alcantarea_gbif )
+dim(alcantarea_gbif$data)
+
+# Checando Campos
+alcantarea_gbif$data %>% names
+```
+
+3. Observando os problemas reportados a partir da extração desses dados (issues)
+
+```{r Problemas Reportados}
+### Problemas reportados
+gbif_issues()
+
+issues_gbif<- alcantarea_gbif$data$issues %>%
+  #unique() %>% 
+  strsplit(.,"[,]") %>%
+  unlist() %>%
+  unique()
+### Gerou e separou vários issues
+
+## Ver quais problemas foram baixados no dataset da espécie em questão.
+gbif_issues() %>% head %>%
+  data.frame() %>% 
+  filter(code %in% issues_gbif)
+
+gbif_issues() %>%
+  data.frame() %>% 
+  filter(code %in% issues_gbif)
+```
+
+4. Selecionando Campos de Interesse nos dados
+
+```{r Seleção de descritores de interesse}
+## Campos de Interesse
+alcantarea_gbif1 <- alcantarea_gbif$data %>%
+  dplyr::select(scientificName, acceptedScientificName, decimalLatitude, decimalLongitude,
+                issues, basisOfRecord, occurrenceStatus, rightsHolder, 
+                datasetName, recordedBy, country) 
+
+alcantarea_gbif1 <- alcantarea_gbif1 %>% 
+  distinct() 
+
+
+# checar niveis dos fatores
+lapply(alcantarea_gbif1, unique)
+```
+
+5. Observando os problemas reportados a partir da extração desses dados
+
+```{r Problemas Não Reportados}
+### Problemas não reportados
+# Investigar niveis suspeitos, caso essa espécie fosse distribuída em várias localidades
+## 
+alcantarea_gbif1 %>% 
+  distinct(country) %>% 
+  pull()
+
+# Só tem no Brasil mesmo... aqui no caso da Dory, tinha vários países de ocorrencia que não tem a spp
+alcantarea_gbif1 %>%
+  group_by(country) %>% 
+  summarise(occ = length(scientificName)) %>% 
+  ggplot(aes(occ, y=country)) +
+  geom_bar(stat = 'identity') 
+
+### OBS: deu uma barra grande pq só tem o Brasil mesmo.
+
+# Fonte das regioes erradas
+# Não se aplicaria aqui, já que somente há uma localidade
+alcantarea_gbif1 %>% 
+  filter(country %in% c("Brazil")) %>% 
+  distinct(datasetName)
+
+## O script acima gerou um NA, resolvi retirá-lo
+alcantarea_gbif1 %>% 
+  filter(datasetName %in% c("NA"))
+# Filtrar todas do dataset suspeito
+alcantarea_gbif_ok <- alcantarea_gbif1 %>% 
+  filter(!datasetName %in% c("NA"))
+```
+
+6. Checando os pontos de ocorrência da espécie pela confecção de um mapa
+
+```{r Checagem de Pontos de Ocorrência}
+World<-map_data('world')
+Brazil <- map_data('world', region='Brazil')
+# checar pontos
+ggplot() +
+  geom_polygon(data = Brazil, aes(x = long, y = lat, group = group)) +
+  coord_fixed() +
+  theme_classic() +
+  geom_point(data = alcantarea_gbif_ok, aes(x = decimalLongitude, y = decimalLatitude), color = "red") +
+  labs(x = "Longitude", y = "Latitude", title = expression(italic("Alcantarea imperialis")))
+
+
+# Checar profundidade - Não se aplicou no meu porque não tenho uma variável contínua de interesse.
+# A maioria está com NAs como elevação. No exemplo da aula, a variável foi depth (profundidade)
+```
+
+**Observação**: Nesse relatório não foi reportado nada relacionado ao OBIS, uma vez que esse banco de dados é mais aplicado para dados marinhos. Portanto, todo o script e passo a passo relacionado ao OBIS não foi reportado aqui. Pacotes relacionados ao obis também não foram carregados e utlizados.    
+  
+7. Mapeando ocorrências e gerando planilha de dados de interesse
+
+```{r Mapeamento das Ocorrências}
+all_data <- bind_rows(alcantarea_gbif_ok %>% 
+                        mutate(repo = paste0("gbif", row.names(.)))) %>%
+  column_to_rownames("repo") %>% 
+  dplyr::select(scientificName, acceptedScientificName, decimalLatitude, decimalLongitude,
+                occurrenceStatus, country) %>% 
+  distinct() %>% 
+  rownames_to_column("occ") %>% 
+  separate(col = "occ", into = c("datasetName", "rn"), sep = 4) %>%
+  mutate(scientificName = "Alcantarea imperialis") %>% 
+  dplyr::select(-rn)
+
+# mapear ocorrencias
+ggplot() +
+  geom_polygon(data = Brazil, aes(x = long, y = lat, group = group)) +
+  coord_fixed() +
+  theme_classic() +
+  geom_point(data = alcantarea_gbif_ok, aes(x = decimalLongitude, y = decimalLatitude, color = datasetName)) +
+  #theme(legend.title = element_blank()) +
+  labs(x = "Longitude", y = "Latitude", title = expression(italic("Alcantarea imperialis")))
+
+## Aqui, caso eu quisesse gerar a planilha com as informações selecionadas
+write.csv(all_data, "Alcantarea_imperialis_info_gbif.csv", row.names = FALSE)
+```
+
+7. Parte extra: em caso de classificar automaticamente os pontos
+
+```{r Classificação Automática dos Pontos}
+# funcao para classificar ocorrencias suspeitas
+flag_outlier <- function(df, species){
+  
+  # funcao para classificar ocorrencias suspeitas
+  # baseada no calculo do centroide de todas ocorrencias
+  # indica como 'check' as ocorrencias que tem distancias até o centroide
+  # acima do 90th quantil (default) das distancias calculadas
+  
+  dados <- df %>% 
+    dplyr::filter(scientificName == species); 
+  
+  dados2 <- geosphere::distVincentyEllipsoid(
+    dados %>%
+      summarise(centr_lon = median(decimalLongitude),
+                centr_lat = median(decimalLatitude)),
+    dados %>% 
+      dplyr::select(decimalLongitude, decimalLatitude)
+  ) %>% 
+    bind_cols(dados) %>% 
+    rename(dist_centroid = '...1') %>% 
+    mutate(flag = ifelse(dist_centroid < quantile(dist_centroid, probs = 0.9), "OK",
+                         ifelse(dist_centroid >= quantile(dist_centroid, probs = 0.90) & dist_centroid < quantile(dist_centroid, probs = 0.95), "check > Q90",
+                                ifelse(dist_centroid >= quantile(dist_centroid, probs = 0.95), "check > Q95", "OK"))))
+  
+  # mutate(flag = ifelse(dist_centroid > quantile(dist_centroid, probs = prob), "check", "OK"))
+  
+  print(dados2)
+  
+}
+
+#Distâncias acima do 90° percentil, são consideradas como dados suspeitos
+
+
+# Classificar ocorrências
+marcados <- alcantarea_gbif$data %>% 
+  data.frame() %>% 
+  dplyr::select(scientificName, decimalLongitude, decimalLatitude, datasetName) %>% 
+  distinct() %>% 
+  flag_outlier(., "Alcantarea imperialis (Carrière) Harms")
+
+
+# Mapa
+ggplot() +
+  geom_polygon(data = Brazil, aes(x = long, y = lat, group = group)) +
+  coord_fixed() +
+  theme_classic() +
+  geom_point(data = marcados, 
+             aes(x = decimalLongitude, y = decimalLatitude, 
+                 color = flag)) +
+  theme(legend.title = element_blank()) +
+  labs(x = "longitude", y = "latitude", 
+       title = expression(italic("Alcantarea imperialis")))
+
+
+### Duas ocorrências estão suspeitas e de fato, pelo conhecimento da spp, a que está mais
+### suspeita é o ponto marcado na região centro-oeste/norte.
+### O outro ponto é o rosa, que se encontra no sul. 
+### A espécie tem distribuição RJ/ES/SP
+```
+
+8. Checando essas ocorrências suspeitas e plotando com o pacote ``scrubr``
+
+```{r Ocorrências Suspeitas}
+# Usando os dados com flag
+data_scrubr <- marcados %>% 
+  dframe() %>% 
+  coord_impossible() %>% 
+  coord_incomplete() %>% 
+  coord_unlikely() %>% 
+  dedup()
+
+
+# Mapa
+ggplot() +
+  geom_polygon(data = Brazil, aes(x = long, y = lat, group = group)) +
+  coord_fixed() +
+  theme_classic() +
+  geom_point(data = data_scrubr, 
+             aes(x = decimalLongitude, y = decimalLatitude), 
+             color = "red") +
+  geom_point(data = marcados %>% 
+               filter(flag != "OK"), 
+             aes(x = decimalLongitude, y = decimalLatitude), 
+             color = "blue", shape = 3) +
+  theme(legend.title = element_blank()) +
+  labs(x = "Longitude", y = "Latitude", 
+       title = expression(italic("Alcantarea imperialis")))
+
+### Duas ocorrências suspeitas marcadas com uma cruz e retirou as duplicadas
+```
+
+9. Checando as coordenadas comparando com as coordenadas do GBIF
+
+```{r Checagem das Coordenadas}
+#Vai checar algumas coordenadas e comparar com as coordenadas do gbif
+flags <-
+  clean_coordinates(
+    x = marcados,
+    lon = "decimalLongitude",
+    lat = "decimalLatitude",
+    species = "scientificName",
+    tests = c("equal", "gbif",
+              "zeros", "seas")
+  )
+## Não encontrou problemas como foi explicado na aula da disciplina
+```
+
+
